@@ -61,3 +61,19 @@ mainClass = "Main"
 [[ports]]
 localPort = 5900
 externalPort = 80
+
+[workflows]
+runButton = "Run"
+
+[[workflows.workflow]]
+name = "Run"
+author = 42050732
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "mvn compile"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "mvn exec:java -Dexec.mainClass=\"Main\""
