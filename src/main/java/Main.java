@@ -35,7 +35,6 @@ public class Main {
         mainPanel.setLayout(new BorderLayout(10, 10));
         mainPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
 
-        // Buttons Panel
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
         selectButton = new JButton("Select Folder");
         organizeButton = new JButton("Start Organizing");
@@ -43,9 +42,8 @@ public class Main {
         buttonPanel.add(selectButton);
         buttonPanel.add(organizeButton);
 
-        // Progress Panel
         JPanel progressPanel = new JPanel(new BorderLayout(5, 5));
-        progressBar = new JProgressBar();
+        progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
         statusLabel = new JLabel("Select a folder to begin", SwingConstants.CENTER);
         progressPanel.add(progressBar, BorderLayout.CENTER);
@@ -80,39 +78,59 @@ public class Main {
 
         selectButton.setEnabled(false);
         organizeButton.setEnabled(false);
+        progressBar.setValue(0);
         statusLabel.setText("Scanning for images...");
 
         SwingWorker<Void, PhotoProgress> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
-                // First, scan for all image files recursively
-                List<File> imageFiles = new ArrayList<>();
-                scanDirectory(selectedDirectory, imageFiles);
+                List<Path> imageFiles = new ArrayList<>();
+                
+                // Scan for image files
+                try {
+                    Files.walk(selectedDirectory.toPath())
+                        .filter(Files::isRegularFile)
+                        .filter(path -> isImageFile(path.toString()))
+                        .forEach(imageFiles::add);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    return null;
+                }
 
                 int total = imageFiles.size();
-                int current = 0;
+                if (total == 0) {
+                    publish(new PhotoProgress(0, 0, "No image files found"));
+                    return null;
+                }
 
-                for (File file : imageFiles) {
+                int current = 0;
+                for (Path imagePath : imageFiles) {
                     current++;
                     try {
-                        // Get date and create target directory
-                        Date photoDate = getPhotoDate(file);
+                        File imageFile = imagePath.toFile();
+                        Date photoDate = getPhotoDate(imageFile);
                         String yearMonth = new SimpleDateFormat("yyyy/MM").format(photoDate);
-                        File targetDir = new File(selectedDirectory, yearMonth);
-                        targetDir.mkdirs();
+                        
+                        // Create target directory
+                        Path targetDir = selectedDirectory.toPath().resolve(yearMonth);
+                        Files.createDirectories(targetDir);
 
-                        // Move the file
-                        Path source = file.toPath();
-                        Path target = new File(targetDir, file.getName()).toPath();
-                        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-
-                        // Update progress
+                        // Create target path
+                        Path targetPath = targetDir.resolve(imagePath.getFileName());
+                        
+                        // Move file
+                        Files.move(imagePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                        
                         publish(new PhotoProgress(current, total, 
-                            String.format("Moving: %s to %s", file.getName(), yearMonth)));
-                    } catch (IOException e) {
+                            String.format("Moved %s to %s", imagePath.getFileName(), yearMonth)));
+                        
+                        // Small delay to prevent overwhelming the file system
+                        Thread.sleep(100);
+                        
+                    } catch (Exception e) {
                         e.printStackTrace();
                         publish(new PhotoProgress(current, total, 
-                            "Error moving: " + file.getName()));
+                            "Error processing: " + imagePath.getFileName()));
                     }
                 }
                 return null;
@@ -121,37 +139,26 @@ public class Main {
             @Override
             protected void process(List<PhotoProgress> chunks) {
                 PhotoProgress latest = chunks.get(chunks.size() - 1);
-                int progress = (latest.current * 100) / latest.total;
-                progressBar.setValue(progress);
+                if (latest.total > 0) {
+                    int progress = (latest.current * 100) / latest.total;
+                    progressBar.setValue(progress);
+                }
                 statusLabel.setText(String.format("%s (%d/%d)", 
                     latest.message, latest.current, latest.total));
             }
 
             @Override
             protected void done() {
-                JOptionPane.showMessageDialog(frame, "Photo organization complete!", 
-                    "Success", JOptionPane.INFORMATION_MESSAGE);
                 selectButton.setEnabled(true);
                 organizeButton.setEnabled(true);
+                String message = progressBar.getValue() > 0 ? 
+                    "Photo organization complete!" : "No photos were found to organize";
+                JOptionPane.showMessageDialog(frame, message);
                 statusLabel.setText("Select a folder to begin");
-                progressBar.setValue(0);
             }
         };
 
         worker.execute();
-    }
-
-    private void scanDirectory(File directory, List<File> imageFiles) {
-        File[] files = directory.listFiles();
-        if (files == null) return;
-
-        for (File file : files) {
-            if (file.isDirectory()) {
-                scanDirectory(file, imageFiles);
-            } else if (isImageFile(file.getName())) {
-                imageFiles.add(file);
-            }
-        }
     }
 
     private boolean isImageFile(String name) {
@@ -162,7 +169,6 @@ public class Main {
 
     private Date getPhotoDate(File file) {
         try {
-            // Try to get EXIF date
             Metadata metadata = ImageMetadataReader.readMetadata(file);
             ExifSubIFDDirectory directory = 
                 metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
@@ -178,7 +184,6 @@ public class Main {
         return new Date(file.lastModified());
     }
 
-    // Helper class to track progress
     private static class PhotoProgress {
         final int current;
         final int total;
