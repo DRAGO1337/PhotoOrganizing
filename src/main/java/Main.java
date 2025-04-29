@@ -5,6 +5,8 @@ import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
@@ -152,7 +154,7 @@ public class Main {
                 return stats;
             }
 
-            private void processImage(Path imagePath, int current, int total) throws IOException {
+            private void processImage(Path imagePath, int current, int total) throws IOException, InterruptedException {
                 File imageFile = imagePath.toFile();
                 Date photoDate = getPhotoDate(imageFile);
                 String yearMonth = new SimpleDateFormat("yyyy/MM").format(photoDate);
