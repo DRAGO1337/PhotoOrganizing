@@ -76,4 +76,4 @@ args = "mvn compile"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "mvn exec:java -Dexec.mainClass=\"Main\""
+args = "mvn exec:java -Dexec.mainClass=\"com.photoorganizer.Main\""
