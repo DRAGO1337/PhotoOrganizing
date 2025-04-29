@@ -21,7 +21,8 @@ public class Main {
     private JButton organizeButton;
     private File selectedDirectory;
     private final Set<String> SUPPORTED_FORMATS = new HashSet<>(Arrays.asList(
-        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".heic"
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".heic",
+        ".cr2", ".nef", ".arw", ".raw", ".rw2", ".orf", ".raf", ".srw", ".dng"
     ));
     private volatile boolean isOrganizing = false;
 
@@ -119,7 +120,13 @@ public class Main {
                 try {
                     Files.walk(selectedDirectory.toPath())
                         .filter(Files::isRegularFile)
-                        .filter(path -> isImageFile(path.toString()))
+                        .filter(path -> {
+                            boolean isImage = isImageFile(path.toString());
+                            if (isImage) {
+                                System.out.println("Found image: " + path);
+                            }
+                            return isImage;
+                        })
                         .forEach(imageFiles::add);
 
                     int total = imageFiles.size();
@@ -216,21 +223,25 @@ public class Main {
     private Date getPhotoDate(File file) {
         try {
             Metadata metadata = ImageMetadataReader.readMetadata(file);
-            ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
             
-            if (directory != null) {
-                // Try original date first
-                Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
-                if (date != null) return date;
-                
-                // Fall back to other EXIF dates
-                date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME);
-                if (date != null) return date;
-                
-                date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_DIGITIZED);
-                if (date != null) return date;
+            // Try all available directories for date information
+            for (com.drew.metadata.Directory directory : metadata.getDirectories()) {
+                // Try various date tags in order of preference
+                for (int tagType : new int[] {
+                    ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL,
+                    ExifSubIFDDirectory.TAG_DATETIME,
+                    ExifSubIFDDirectory.TAG_DATETIME_DIGITIZED
+                }) {
+                    try {
+                        Date date = directory.getDate(tagType);
+                        if (date != null) return date;
+                    } catch (Exception ignored) {
+                        // Continue to next tag if this one fails
+                    }
+                }
             }
         } catch (ImageProcessingException | IOException e) {
+            System.out.println("Warning: Could not read metadata from " + file.getName() + ": " + e.getMessage());
             // Fallback to file dates
         }
         
