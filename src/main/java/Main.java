@@ -6,12 +6,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Date;
+import java.util.*;
 import java.util.List;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
+import com.drew.imaging.ImageProcessingException;
 
 public class Main {
     private JFrame frame;
@@ -20,20 +20,30 @@ public class Main {
     private JButton selectButton;
     private JButton organizeButton;
     private File selectedDirectory;
+    private final Set<String> SUPPORTED_FORMATS = new HashSet<>(Arrays.asList(
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".heic"
+    ));
+    private volatile boolean isOrganizing = false;
 
     public Main() {
         createAndShowGUI();
     }
 
     private void createAndShowGUI() {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         frame = new JFrame("Photo Organizer");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(500, 200);
+        frame.setSize(600, 250);
         frame.setLocationRelativeTo(null);
 
         JPanel mainPanel = new JPanel();
         mainPanel.setLayout(new BorderLayout(10, 10));
-        mainPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
         selectButton = new JButton("Select Folder");
@@ -42,10 +52,14 @@ public class Main {
         buttonPanel.add(selectButton);
         buttonPanel.add(organizeButton);
 
-        JPanel progressPanel = new JPanel(new BorderLayout(5, 5));
+        JPanel progressPanel = new JPanel(new BorderLayout(5, 10));
         progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
+        progressBar.setPreferredSize(new Dimension(progressBar.getPreferredSize().width, 25));
+
         statusLabel = new JLabel("Select a folder to begin", SwingConstants.CENTER);
+        statusLabel.setFont(statusLabel.getFont().deriveFont(12.0f));
+
         progressPanel.add(progressBar, BorderLayout.CENTER);
         progressPanel.add(statusLabel, BorderLayout.SOUTH);
 
@@ -53,19 +67,31 @@ public class Main {
         mainPanel.add(progressPanel, BorderLayout.CENTER);
 
         frame.add(mainPanel);
-
         setupListeners();
         frame.setVisible(true);
     }
 
     private void setupListeners() {
         selectButton.addActionListener(e -> selectFolder());
-        organizeButton.addActionListener(e -> startOrganizing());
+        organizeButton.addActionListener(e -> {
+            if (!isOrganizing) {
+                startOrganizing();
+            } else {
+                int choice = JOptionPane.showConfirmDialog(frame,
+                    "Organization in progress. Do you want to cancel?",
+                    "Cancel Organization",
+                    JOptionPane.YES_NO_OPTION);
+                if (choice == JOptionPane.YES_OPTION) {
+                    isOrganizing = false;
+                }
+            }
+        });
     }
 
     private void selectFolder() {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Select Photos Folder");
         if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
             selectedDirectory = chooser.getSelectedFile();
             statusLabel.setText("Selected: " + selectedDirectory.getPath());
@@ -76,84 +102,105 @@ public class Main {
     private void startOrganizing() {
         if (selectedDirectory == null) return;
 
+        isOrganizing = true;
         selectButton.setEnabled(false);
-        organizeButton.setEnabled(false);
+        organizeButton.setText("Cancel");
         progressBar.setValue(0);
         statusLabel.setText("Scanning for images...");
 
-        SwingWorker<Void, PhotoProgress> worker = new SwingWorker<>() {
+        SwingWorker<Map<String, Integer>, PhotoProgress> worker = new SwingWorker<>() {
             @Override
-            protected Void doInBackground() throws Exception {
+            protected Map<String, Integer> doInBackground() throws Exception {
+                Map<String, Integer> stats = new HashMap<>();
+                stats.put("processed", 0);
+                stats.put("errors", 0);
+
                 List<Path> imageFiles = new ArrayList<>();
-                
-                // Scan for image files
                 try {
                     Files.walk(selectedDirectory.toPath())
                         .filter(Files::isRegularFile)
                         .filter(path -> isImageFile(path.toString()))
                         .forEach(imageFiles::add);
+
+                    int total = imageFiles.size();
+                    if (total == 0) {
+                        publish(new PhotoProgress(0, 0, "No image files found"));
+                        return stats;
+                    }
+
+                    for (int i = 0; i < total && isOrganizing; i++) {
+                        Path imagePath = imageFiles.get(i);
+                        try {
+                            processImage(imagePath, i, total);
+                            stats.put("processed", stats.get("processed") + 1);
+                        } catch (Exception e) {
+                            stats.put("errors", stats.get("errors") + 1);
+                            e.printStackTrace();
+                        }
+                    }
                 } catch (IOException e) {
                     e.printStackTrace();
-                    return null;
+                    publish(new PhotoProgress(-1, -1, "Error scanning directory: " + e.getMessage()));
+                }
+                return stats;
+            }
+
+            private void processImage(Path imagePath, int current, int total) throws IOException {
+                File imageFile = imagePath.toFile();
+                Date photoDate = getPhotoDate(imageFile);
+                String yearMonth = new SimpleDateFormat("yyyy/MM").format(photoDate);
+                
+                Path targetDir = selectedDirectory.toPath().resolve(yearMonth);
+                Files.createDirectories(targetDir);
+
+                Path targetPath = targetDir.resolve(imagePath.getFileName());
+                String fileName = imagePath.getFileName().toString();
+                
+                // Handle duplicate filenames
+                int counter = 1;
+                while (Files.exists(targetPath)) {
+                    String newName = fileName.replaceFirst("(\\.[^.]+)$", "_" + counter + "$1");
+                    targetPath = targetDir.resolve(newName);
+                    counter++;
                 }
 
-                int total = imageFiles.size();
-                if (total == 0) {
-                    publish(new PhotoProgress(0, 0, "No image files found"));
-                    return null;
-                }
-
-                int current = 0;
-                for (Path imagePath : imageFiles) {
-                    current++;
-                    try {
-                        File imageFile = imagePath.toFile();
-                        Date photoDate = getPhotoDate(imageFile);
-                        String yearMonth = new SimpleDateFormat("yyyy/MM").format(photoDate);
-                        
-                        // Create target directory
-                        Path targetDir = selectedDirectory.toPath().resolve(yearMonth);
-                        Files.createDirectories(targetDir);
-
-                        // Create target path
-                        Path targetPath = targetDir.resolve(imagePath.getFileName());
-                        
-                        // Move file
-                        Files.move(imagePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
-                        
-                        publish(new PhotoProgress(current, total, 
-                            String.format("Moved %s to %s", imagePath.getFileName(), yearMonth)));
-                        
-                        // Small delay to prevent overwhelming the file system
-                        Thread.sleep(100);
-                        
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        publish(new PhotoProgress(current, total, 
-                            "Error processing: " + imagePath.getFileName()));
-                    }
-                }
-                return null;
+                Files.move(imagePath, targetPath, StandardCopyOption.ATOMIC_MOVE);
+                publish(new PhotoProgress(current + 1, total, 
+                    String.format("Processed: %s → %s", fileName, yearMonth)));
+                
+                Thread.sleep(50); // Small delay to prevent UI freezing
             }
 
             @Override
             protected void process(List<PhotoProgress> chunks) {
-                PhotoProgress latest = chunks.get(chunks.size() - 1);
-                if (latest.total > 0) {
-                    int progress = (latest.current * 100) / latest.total;
-                    progressBar.setValue(progress);
+                if (!chunks.isEmpty()) {
+                    PhotoProgress latest = chunks.get(chunks.size() - 1);
+                    if (latest.total > 0) {
+                        int progress = (latest.current * 100) / latest.total;
+                        progressBar.setValue(progress);
+                    }
+                    statusLabel.setText(String.format("%s (%d/%d)", 
+                        latest.message, latest.current, latest.total));
                 }
-                statusLabel.setText(String.format("%s (%d/%d)", 
-                    latest.message, latest.current, latest.total));
             }
 
             @Override
             protected void done() {
+                try {
+                    Map<String, Integer> stats = get();
+                    String message = String.format("Organization complete!\nProcessed: %d files\nErrors: %d",
+                        stats.get("processed"), stats.get("errors"));
+                    JOptionPane.showMessageDialog(frame, message, "Complete", JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    JOptionPane.showMessageDialog(frame, "An error occurred: " + e.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
+                }
+                
+                isOrganizing = false;
                 selectButton.setEnabled(true);
+                organizeButton.setText("Start Organizing");
                 organizeButton.setEnabled(true);
-                String message = progressBar.getValue() > 0 ? 
-                    "Photo organization complete!" : "No photos were found to organize";
-                JOptionPane.showMessageDialog(frame, message);
                 statusLabel.setText("Select a folder to begin");
             }
         };
@@ -162,23 +209,40 @@ public class Main {
     }
 
     private boolean isImageFile(String name) {
-        name = name.toLowerCase();
-        return name.endsWith(".jpg") || name.endsWith(".jpeg") || 
-               name.endsWith(".png") || name.endsWith(".gif");
+        return SUPPORTED_FORMATS.stream()
+            .anyMatch(format -> name.toLowerCase().endsWith(format));
     }
 
     private Date getPhotoDate(File file) {
         try {
             Metadata metadata = ImageMetadataReader.readMetadata(file);
-            ExifSubIFDDirectory directory = 
-                metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+            ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
             
-            if (directory != null && 
-                directory.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
-                return directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
+            if (directory != null) {
+                // Try original date first
+                Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
+                if (date != null) return date;
+                
+                // Fall back to other EXIF dates
+                date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME);
+                if (date != null) return date;
+                
+                date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_DIGITIZED);
+                if (date != null) return date;
             }
-        } catch (Exception e) {
-            // Fallback to file modification date if EXIF reading fails
+        } catch (ImageProcessingException | IOException e) {
+            // Fallback to file dates
+        }
+        
+        // Try creation time first, then fall back to modified time
+        try {
+            BasicFileAttributes attrs = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+            FileTime creationTime = attrs.creationTime();
+            if (creationTime != null) {
+                return new Date(creationTime.toMillis());
+            }
+        } catch (IOException e) {
+            // Fall back to last modified date
         }
         
         return new Date(file.lastModified());
