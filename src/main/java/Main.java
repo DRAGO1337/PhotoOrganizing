@@ -1,4 +1,5 @@
 package com.photoorganizer;
+
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
