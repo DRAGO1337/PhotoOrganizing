@@ -31,7 +31,7 @@
 
     <build>
         <plugins>
-            <!-- JavaFX Maven Plugin (Updated to version 0.0.9) -->
+            <!-- JavaFX Maven Plugin (Updated to version 0.0.8) -->
             <plugin>
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
@@ -60,7 +60,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.photoorganizer.Main</mainClass> <!-- Main class in the manifest -->
+                            <mainClass>Main</mainClass> <!-- Main class in the manifest -->
                         </manifest>
                     </archive>
                 </configuration>
