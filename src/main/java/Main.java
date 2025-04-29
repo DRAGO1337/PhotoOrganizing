@@ -6,7 +6,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
@@ -78,51 +80,56 @@ public class Main {
 
         selectButton.setEnabled(false);
         organizeButton.setEnabled(false);
+        statusLabel.setText("Scanning for images...");
 
-        SwingWorker<Void, Integer> worker = new SwingWorker<>() {
+        SwingWorker<Void, PhotoProgress> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
-                File[] files = selectedDirectory.listFiles((dir, name) -> 
-                    name.toLowerCase().endsWith(".jpg") || 
-                    name.toLowerCase().endsWith(".jpeg") || 
-                    name.toLowerCase().endsWith(".png"));
+                // First, scan for all image files recursively
+                List<File> imageFiles = new ArrayList<>();
+                scanDirectory(selectedDirectory, imageFiles);
 
-                if (files == null) return null;
-
-                int total = files.length;
+                int total = imageFiles.size();
                 int current = 0;
 
-                for (File file : files) {
+                for (File file : imageFiles) {
                     current++;
-                    String dateStr = getImageDate(file);
-                    File targetDir = new File(selectedDirectory, dateStr);
-                    targetDir.mkdirs();
-
                     try {
+                        // Get date and create target directory
+                        Date photoDate = getPhotoDate(file);
+                        String yearMonth = new SimpleDateFormat("yyyy/MM").format(photoDate);
+                        File targetDir = new File(selectedDirectory, yearMonth);
+                        targetDir.mkdirs();
+
+                        // Move the file
                         Path source = file.toPath();
                         Path target = new File(targetDir, file.getName()).toPath();
                         Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+
+                        // Update progress
+                        publish(new PhotoProgress(current, total, 
+                            String.format("Moving: %s to %s", file.getName(), yearMonth)));
                     } catch (IOException e) {
                         e.printStackTrace();
+                        publish(new PhotoProgress(current, total, 
+                            "Error moving: " + file.getName()));
                     }
-
-                    int progress = (current * 100) / total;
-                    publish(current, total);
-                    setProgress(progress);
                 }
                 return null;
             }
 
             @Override
-            protected void process(java.util.List<Integer> chunks) {
-                int current = chunks.get(0);
-                int total = chunks.get(1);
-                statusLabel.setText(String.format("Current: %d/%d files moved", current, total));
+            protected void process(List<PhotoProgress> chunks) {
+                PhotoProgress latest = chunks.get(chunks.size() - 1);
+                int progress = (latest.current * 100) / latest.total;
+                progressBar.setValue(progress);
+                statusLabel.setText(String.format("%s (%d/%d)", 
+                    latest.message, latest.current, latest.total));
             }
 
             @Override
             protected void done() {
-                JOptionPane.showMessageDialog(frame, "Organizing Complete!", 
+                JOptionPane.showMessageDialog(frame, "Photo organization complete!", 
                     "Success", JOptionPane.INFORMATION_MESSAGE);
                 selectButton.setEnabled(true);
                 organizeButton.setEnabled(true);
@@ -131,29 +138,57 @@ public class Main {
             }
         };
 
-        worker.addPropertyChangeListener(evt -> {
-            if ("progress".equals(evt.getPropertyName())) {
-                progressBar.setValue((Integer) evt.getNewValue());
-            }
-        });
-
         worker.execute();
     }
 
-    private String getImageDate(File file) {
+    private void scanDirectory(File directory, List<File> imageFiles) {
+        File[] files = directory.listFiles();
+        if (files == null) return;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                scanDirectory(file, imageFiles);
+            } else if (isImageFile(file.getName())) {
+                imageFiles.add(file);
+            }
+        }
+    }
+
+    private boolean isImageFile(String name) {
+        name = name.toLowerCase();
+        return name.endsWith(".jpg") || name.endsWith(".jpeg") || 
+               name.endsWith(".png") || name.endsWith(".gif");
+    }
+
+    private Date getPhotoDate(File file) {
         try {
+            // Try to get EXIF date
             Metadata metadata = ImageMetadataReader.readMetadata(file);
-            ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+            ExifSubIFDDirectory directory = 
+                metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
             
-            if (directory != null && directory.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
-                Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
-                return new SimpleDateFormat("yyyy-MM-dd").format(date);
+            if (directory != null && 
+                directory.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
+                return directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
             }
         } catch (Exception e) {
             // Fallback to file modification date if EXIF reading fails
         }
         
-        return new SimpleDateFormat("yyyy-MM-dd").format(new Date(file.lastModified()));
+        return new Date(file.lastModified());
+    }
+
+    // Helper class to track progress
+    private static class PhotoProgress {
+        final int current;
+        final int total;
+        final String message;
+
+        PhotoProgress(int current, int total, String message) {
+            this.current = current;
+            this.total = total;
+            this.message = message;
+        }
     }
 
     public static void main(String[] args) {
